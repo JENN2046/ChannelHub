@@ -25,7 +25,7 @@ rm -f "$ZIP" "$ZIP.sha256"
        'ChannelHub/logs/*' 'ChannelHub/cache/*' 'ChannelHub/node_modules/*'
 )
 unzip -Z -1 "$ZIP" | grep -Fxq 'ChannelHub/plugin-manifest.json'
-if unzip -Z -1 "$ZIP" | grep -E '/(config\.env|\.env|state/|logs/|cache/|node_modules/)' ; then
+if unzip -Z -1 "$ZIP" | grep -E '(^|/)(config\.env|\.env)$|/(state|logs|cache|node_modules)/' ; then
   echo "Package contains disallowed runtime files" >&2
   exit 1
 fi
