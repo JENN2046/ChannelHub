@@ -1,0 +1,25 @@
+# Workspace/runtime state is never source.
+node_modules/
+dist/
+coverage/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.pid
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+**/config.env
+**/state/
+**/logs/
+**/cache/
+**/runtime-data/
+**/node_modules/
+**/outbox.jsonl
+**/sessions.jsonl
+**/tasks.jsonl
+.DS_Store

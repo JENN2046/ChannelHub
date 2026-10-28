@@ -1,0 +1,13 @@
+{
+  "name": "@jenn/channelhub-vcp-plugin",
+  "version": "0.4.1",
+  "private": true,
+  "description": "ChannelHub source-of-record and installable VCP service plugin",
+  "scripts": {
+    "test": "node --test tests/source-layout.test.cjs",
+    "package:plugin": "bash scripts/package-plugin.sh"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

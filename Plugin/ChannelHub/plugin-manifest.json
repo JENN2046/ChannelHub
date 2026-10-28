@@ -1,0 +1,31 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "ChannelHub",
+  "version": "0.4.1",
+  "displayName": "ChannelHub 多渠道消息接入",
+  "description": "Standalone, opt-in service plugin for authenticated channel adapters, sessions and VCP-native execution.",
+  "author": "Jenn / Nobao",
+  "pluginType": "service",
+  "entryPoint": {
+    "type": "nodejs",
+    "script": "channel-hub.js"
+  },
+  "communication": {
+    "protocol": "direct"
+  },
+  "configSchema": {
+    "ChannelHubEnabled": "boolean",
+    "ChannelHubDataDir": "string",
+    "ChannelHubModel": "string",
+    "ChannelHubAgents": "string",
+    "ChannelHubTimeoutMs": "integer"
+  },
+  "capabilities": {
+    "services": [
+      {
+        "serviceName": "ChannelHub",
+        "description": "Adapter-authenticated B2 inbound events, session mapping and inline replies; no independent AI runtime."
+      }
+    ]
+  }
+}

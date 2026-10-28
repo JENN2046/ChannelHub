@@ -1,0 +1,72 @@
+name: ChannelHub 0.4.1 source and host verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: No-dependency source smoke
+        run: npm test
+
+  pinned-host-regression:
+    needs: source-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout independent ChannelHub source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout frozen VCP host (test fixture only)
+        uses: actions/checkout@v4
+        with:
+          repository: JENN2046/VCPToolBox
+          ref: fff563b2d33ad8aa93474714e050619a07e353e4
+          path: host
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: host/package-lock.json
+      - name: Verify byte-identical plugin source against frozen upstream
+        run: diff -qr host/Plugin/ChannelHub Plugin/ChannelHub
+      - name: Install host fixture dependencies without lifecycle scripts
+        working-directory: host
+        run: npm ci --ignore-scripts
+      - name: Overlay migrated source and preserved regression suite
+        run: |
+          cp -a Plugin/ChannelHub/. host/Plugin/ChannelHub/
+          cp tests/channelHub*.test.js host/tests/
+      - name: ChannelHub regression in pinned VCP host
+        working-directory: host
+        run: npm run test:channelhub
+      - name: QQPersonal adapter regression against host fixture
+        working-directory: host
+        run: node --test Plugin/vcp-onebot-adapter/test/onebot-adapter.test.js
+      - name: Package standalone install candidate
+        run: bash scripts/package-plugin.sh
+      - name: Publish ZIP and checksums (not a production release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChannelHub-0.4.1-install-candidate
+          path: |
+            dist/ChannelHub-v0.4.1.zip
+            dist/ChannelHub-v0.4.1.zip.sha256
+          retention-days: 14
+          if-no-files-found: error
