@@ -21,6 +21,14 @@ ChannelHub accepts authenticated channel events, binds channel conversations to 
 
 Read [Plugin/ChannelHub/README.md](Plugin/ChannelHub/README.md) for configuration and adapter behavior.
 
+## Local development pilot
+
+The isolated local pilot lives in [dev/README.md](dev/README.md). Run
+`python3 -B dev/devctl.py doctor` for prerequisites and `python3 -B dev/devctl.py check`
+for the pinned-host regression and synthetic fixture. This adds development helpers;
+the stable 46-file plugin, native APIs and CI remain unchanged. No production target
+or live channel credentials are supported by this pilot.
+
 ## Safety and release
 
 ChannelHub is opt-in; `ChannelHubEnabled=false` is the example default. Runtime credentials, adapter tokens, state databases, logs and private media **must not** be committed. This source migration does not alter any running VCP, QQ or C2 deployment. A green CI run is not a production QQ acceptance test.
