@@ -479,8 +479,10 @@ def start():
             previous[sig] = signal.signal(sig, request_stop)
         try:
             native_output = (task / "state/native-output.txt").open("xb")
+            # Ctrl-C belongs to the supervisor; drain the separate child over its owned UDS.
             process = subprocess.Popen(sandbox(task, ["/tool/node", "dev/fixture.cjs"]), env=ENV,
-                                       stdout=native_output, stderr=subprocess.STDOUT)
+                                       stdout=native_output, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
             deadline = time.monotonic() + 30
             while not (task / "state/ready.json").exists():
                 if process.poll() is not None or time.monotonic() > deadline or stopped:
