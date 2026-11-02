@@ -29,6 +29,12 @@ for the pinned-host regression and synthetic fixture. This adds development help
 the stable 46-file plugin, native APIs and CI remain unchanged. No production target
 or live channel credentials are supported by this pilot.
 
+Two fixed host profiles are available: `reference` (the default) and
+`tencent-source`. Use `python3 -B dev/devctl.py prepare --host all` to verify
+one ZIP against both isolated host fixtures. Target-host synthetic authentication
+and static server review are recorded separately from native lifecycle checks;
+this is not acceptance of a live server or channel.
+
 ## Safety and release
 
 ChannelHub is opt-in; `ChannelHubEnabled=false` is the example default. Runtime credentials, adapter tokens, state databases, logs and private media **must not** be committed. This source migration does not alter any running VCP, QQ or C2 deployment. A green CI run is not a production QQ acceptance test.

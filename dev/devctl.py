@@ -27,6 +27,7 @@ import zipfile
 
 SOURCE_SHA = "001e50997d94ed108382a09d1d968cffee6b8919"
 HOST_SHA = "fff563b2d33ad8aa93474714e050619a07e353e4"
+HOSTS = {"reference": HOST_SHA, "tencent-source": "a4ab674a403f10b7f91fcfc242719204621b2bb9"}
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path.home()
 CACHE = HOME / ".cache/agents-os-dev/channelhub"
@@ -194,17 +195,32 @@ def snapshot(destination, *, committed=False):
     return identity
 
 
-def host_archive(destination):
-    """Export ordinary pinned source only; exclude agents, diary, config and unrelated plugins."""
+def profile_sha(profile):
+    if profile not in HOSTS:
+        raise Refusal("unknown fixed host profile")
+    return HOSTS[profile]
+
+
+def ensure_host(profile):
+    sha = profile_sha(profile)
     if not HOST_GIT.exists():
         run(["git", "init", "--bare", HOST_GIT])
+    probe = subprocess.run(["git", f"--git-dir={HOST_GIT}", "cat-file", "-e", sha + "^{commit}"],
+                           env=ENV, capture_output=True)
+    if probe.returncode:
         run(["git", "-c", "credential.helper=", f"--git-dir={HOST_GIT}", "fetch", "--depth=1",
-             "https://github.com/JENN2046/VCPToolBox.git", HOST_SHA], timeout=300)
-    refs = ["Plugin.js", "FileFetcherServer.js", "modules", "shared", "package.json", "package-lock.json",
+             "https://github.com/JENN2046/VCPToolBox.git", sha], timeout=300)
+
+
+def host_archive(destination, profile="reference"):
+    """Export ordinary pinned source only; exclude agents, diary, config and unrelated plugins."""
+    ensure_host(profile)
+    sha = profile_sha(profile)
+    refs = ["Plugin.js", "FileFetcherServer.js", "server.js", "modules", "shared", "package.json", "package-lock.json",
             "Plugin/ChannelHub", "Plugin/vcp-dingtalk-adapter", "Plugin/vcp-wecom-adapter", "Plugin/vcp-onebot-adapter"]
-    names = run(["git", f"--git-dir={HOST_GIT}", "ls-tree", "-r", "--name-only", HOST_SHA], capture=True).decode().splitlines()
+    names = run(["git", f"--git-dir={HOST_GIT}", "ls-tree", "-r", "--name-only", sha], capture=True).decode().splitlines()
     names = [n for n in names if admitted(n) and any(n == a or n.startswith(a + "/") for a in refs)]
-    payload = run(["git", f"--git-dir={HOST_GIT}", "archive", HOST_SHA, "--", *names], capture=True)
+    payload = run(["git", f"--git-dir={HOST_GIT}", "archive", sha, "--", *names], capture=True)
     destination.mkdir(parents=True)
     with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
         for entry in archive:
@@ -227,8 +243,16 @@ def base_sandbox():
 
 
 def sandbox(task, argv):
-    return base_sandbox() + ["--bind", str(task / "host"), "/work/host",
+    host = json.loads((task / "host-profile.json").read_text())
+    profile_sha(host["profile"])
+    binds = []
+    # Tests may create private runtime files, but cannot change host core inputs.
+    for name in ("modules", "shared", "Plugin.js", "FileFetcherServer.js", "server.js", "package.json", "package-lock.json"):
+        if (task / "host" / name).exists():
+            binds += ["--ro-bind", str(task / "host" / name), "/work/host/" + name]
+    return base_sandbox() + ["--bind", str(task / "host"), "/work/host", *binds,
         "--ro-bind", str(task / "source"), "/source", "--bind", str(task / "state"), "/runstate",
+        "--setenv", "CH_DEV_HOST_PROFILE", host["profile"],
         "--setenv", "CH_DEV_SOCKET", "/runstate/backend.sock",
         "--setenv", "CH_DEV_STATE", "/runstate/data", "--setenv", "CH_DEV_READY", "/runstate/ready.json",
         "--chdir", "/work/host", "--", *argv]
@@ -265,18 +289,27 @@ def verify_baseline():
                     raise Refusal("resource identity mismatch")
 
 
-def dependencies():
-    target = CACHE / ("deps-" + HOST_SHA[:12])
+def dependency_identity(profile):
+    sha = profile_sha(profile)
+    lock_data = run(["git", f"--git-dir={HOST_GIT}", "show", sha + ":package-lock.json"], capture=True)
+    return {"host": sha, "profile": profile, "node": "24.22.1", "npm": "10.9.8", "lockfile_sha256": digest(lock_data)}
+
+
+def dependencies(profile="reference"):
+    ensure_host(profile)
+    identity = dependency_identity(profile)
+    target = CACHE / ("deps-r2-" + identity["host"][:12] + "-" + identity["lockfile_sha256"][:12] + "-node24.22.1-npm10.9.8")
     marker = target / "complete.json"
     if marker.exists():
         regular(marker)
-        if json.loads(marker.read_text()) != {"host": HOST_SHA, "node": "24.22.1", "npm": "10.9.8"}:
+        if (json.loads(marker.read_text()) != identity
+                or digest((target / "package-lock.json").read_bytes()) != identity["lockfile_sha256"]):
             raise Refusal("dependency cache identity mismatch")
         return target
     if target.exists():
         raise Refusal("incomplete dependency cache retained; inspect before retry")
     print("Preparing pinned dependencies (networked, isolated install; scripts disabled)", flush=True)
-    host_archive(target)
+    host_archive(target, profile)
     npm_root = NPM.parents[1]
     cmd = base_sandbox() + ["--share-net", "--ro-bind", str(npm_root), "/tool/npm",
         "--bind", str(target), "/work", "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
@@ -287,11 +320,14 @@ def dependencies():
         "/tool/node", "/tool/npm/bin/npm-cli.js", "ci", "--ignore-scripts", "--no-audit", "--no-fund",
         "--registry=https://registry.npmjs.org", "--fetch-retries=1"]
     run(cmd, timeout=900)
-    write_json(marker, {"host": HOST_SHA, "node": "24.22.1", "npm": "10.9.8"})
+    if digest((target / "package-lock.json").read_bytes()) != identity["lockfile_sha256"]:
+        raise Refusal("dependency install changed pinned lockfile")
+    write_json(marker, identity)
     return target
 
 
-def new_task(kind, *, committed=False, source=None, identity=None):
+def new_task(kind, *, committed=False, source=None, identity=None, profile="reference"):
+    profile_sha(profile)
     parent = CACHE / "tasks"
     owned_dir(parent)
     task = parent / (kind + "-" + uuid.uuid4().hex)
@@ -301,10 +337,16 @@ def new_task(kind, *, committed=False, source=None, identity=None):
         shutil.copytree(source, task / "source")
     else:
         identity = snapshot(task / "source", committed=committed)
-    deps = dependencies()
-    host_archive(task / "host")
+    print(f"TASK {task.name} ({profile})", flush=True)
+    deps = dependencies(profile)
+    host_archive(task / "host", profile)
+    core = {p.relative_to(task / "host").as_posix(): digest(p.read_bytes())
+            for p in (task / "host").rglob("*") if p.is_file() and "Plugin" not in p.relative_to(task / "host").parts}
+    write_json(task / "host-core.json", core)
+    write_json(task / "host-profile.json", {"profile": profile, **dependency_identity(profile)})
     run(["cp", "-a", "--reflink=auto", deps / "node_modules", task / "host/node_modules"])
-    shutil.rmtree(task / "host/Plugin/ChannelHub")
+    if (task / "host/Plugin/ChannelHub").exists():
+        shutil.rmtree(task / "host/Plugin/ChannelHub")
     shutil.copytree(task / "source/Plugin/ChannelHub", task / "host/Plugin/ChannelHub")
     shutil.copytree(task / "source/dev", task / "host/dev")
     (task / "host/tests").mkdir(exist_ok=True)
@@ -330,14 +372,46 @@ def fixture_only(task):
             shutil.rmtree(path) if path.is_dir() else path.unlink()
 
 
-def check_task(task):
+def verify_core(task):
+    expected = json.loads((task / "host-core.json").read_text())
+    for name, value in expected.items():
+        path = task / "host" / name
+        if not path.is_file() or path.is_symlink() or digest(path.read_bytes()) != value:
+            raise Refusal("host core changed during verification")
+    return {"status": "PASS", "files": len(expected), "sha256": digest(json.dumps(expected, sort_keys=True).encode())}
+
+
+def static_host_evidence(task, profile):
+    if profile == "reference":
+        return {"mode": "native-auth-module-in-fixture", "full_server_executed": False}
+    server = (task / "host/server.js").read_text()
+    begin = server.index("// General API authentication")
+    end = server.index("// This function", begin)
+    excerpt = server[begin:end]
+    checks = {"admin_exemption": "req.path.startsWith('/admin_api')" in excerpt,
+              "callback_exemption": "req.path.startsWith('/plugin-callback')" in excerpt,
+              "bearer_check": "authHeader !== `Bearer ${serverKey}`" in excerpt,
+              "service_mount": "await pluginManager.initializeServices(app, adminPanelRoutes, __dirname)" in server}
+    if not all(checks.values()) or (task / "host/modules/apiBearerAuth.js").exists():
+        raise Refusal("target host differs from fixed static contract")
+    return {"mode": "static-only", "full_server_executed": False, "checks": checks,
+            "server_sha256": digest((task / "host/server.js").read_bytes()),
+            "auth_excerpt_normalized_sha256": digest(excerpt.encode())}
+
+
+def check_task(task, profile="reference"):
+    verify_core(task)
     commands = [
         ("source-layout", ["/tool/node", "--test", "/source/tests/source-layout.test.cjs"]),
-        ("channelhub-regression", ["/tool/node", "--test", *["tests/" + p.name for p in sorted((task / "host/tests").glob("channelHub*.test.js"))]]),
-        ("onebot-regression", ["/tool/node", "--test", "Plugin/vcp-onebot-adapter/test/onebot-adapter.test.js"]),
         ("dev-controls", ["/usr/bin/python3", "-B", "/source/dev/test_devctl.py"]),
         ("isolation", ["/tool/node", "-e", "const fs=require('fs'),net=require('net');if(fs.existsSync('/home/jenn')||process.env.SSH_AUTH_SOCK||process.env.OPENAI_API_KEY)process.exit(1);const s=net.connect({host:'1.1.1.1',port:443});s.on('connect',()=>process.exit(1));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(1),2000)"]),
     ]
+    if profile == "reference":
+        commands[1:1] = [
+            ("channelhub-regression", ["/tool/node", "--test", *["tests/" + p.name for p in sorted((task / "host/tests").glob("channelHub*.test.js"))]]),
+            ("onebot-regression", ["/tool/node", "--test", "Plugin/vcp-onebot-adapter/test/onebot-adapter.test.js"])]
+    else:
+        commands.append(("target-host-compatibility", ["/tool/node", "--test", "dev/host-compat.test.cjs"]))
     results = {}
     for label, command in commands:
         print(f"CHECK {label}", flush=True)
@@ -351,7 +425,11 @@ def check_task(task):
     ready = json.loads((task / "state/verification.json").read_text())
     if not ready.get("mockVerified"):
         raise Refusal("fixture did not verify mock message")
+    if ready.get("hostProfile") != profile or ready.get("authMode") != ("native" if profile == "reference" else "synthetic"):
+        raise Refusal("fixture host or auth evidence mismatch")
     results["manager-and-mock"] = ready
+    results["host-core"] = verify_core(task)
+    results["server-auth-evidence"] = static_host_evidence(task, profile)
     return results
 
 
@@ -452,18 +530,19 @@ def active_record():
     return record
 
 
-def start():
+def start(profile="reference"):
     with lock("instance"):
         if (STATE / "active.json").exists():
             raise Refusal("existing instance record must be resolved first")
         if (STATE / "last-run.json").exists():
             raise Refusal("previous stopped test state retained; run reset before a new start")
         with lock("setup"):
-            task, identity = new_task("start")
+            task, identity = new_task("start", profile=profile)
         fixture_only(task)
         instance = uuid.uuid4().hex
         record = {"schema": SCHEMA, "uid": os.getuid(), "instance": instance,
-                  "pid": os.getpid(), "process_start": process_identity(os.getpid()), "task": task.name}
+                  "pid": os.getpid(), "process_start": process_identity(os.getpid()), "task": task.name,
+                  "host_profile": profile, "host": profile_sha(profile)}
         write_json(STATE / "active.json", record)
         stopped = False
         relay = None
@@ -491,10 +570,13 @@ def start():
             ready = json.loads((task / "state/ready.json").read_text())
             if not ready.get("mockVerified"):
                 raise Refusal("mock verification missing")
+            if ready.get("hostProfile") != profile:
+                raise Refusal("fixture profile mismatch")
             relay = make_relay(task / "state/backend.sock")
             record.update({"port": relay.server_port, "snapshot": identity})
             write_json(STATE / "active.json", record)
-            print(json.dumps({"status": "DEV_ONLY", "url": f"http://127.0.0.1:{relay.server_port}/admin_api/channelHub/ui", "snapshot": identity, "mockVerified": True}), flush=True)
+            print(json.dumps({"status": "DEV_ONLY", "host_profile": profile, "host": profile_sha(profile),
+                              "auth_mode": ready["authMode"], "url": f"http://127.0.0.1:{relay.server_port}/admin_api/channelHub/ui", "snapshot": identity, "mockVerified": True}), flush=True)
             while not stopped and process.poll() is None:
                 relay.handle_request()
             if not stopped:
@@ -589,29 +671,64 @@ def validate_zip(path, source):
     return digest(path.read_bytes())
 
 
-def prepare():
+def require_matrix(matrix, profiles, artifact_hash):
+    if set(matrix) != set(profiles):
+        raise Refusal("incomplete host verification matrix")
+    for profile in profiles:
+        row = matrix[profile]
+        if (row.get("status") != "PASS" or row.get("host") != profile_sha(profile)
+                or row.get("artifact_sha256") != artifact_hash):
+            raise Refusal("host matrix failed or refers to a different candidate")
+
+
+def verify_install(task):
+    source = task / "source/Plugin/ChannelHub"
+    installed = task / "host/Plugin/ChannelHub"
+    expected = {p.relative_to(source).as_posix(): digest(p.read_bytes()) for p in source.rglob("*") if p.is_file()}
+    actual = {p.relative_to(installed).as_posix(): digest(p.read_bytes()) for p in installed.rglob("*") if p.is_file()}
+    if actual != expected:
+        raise Refusal("installed candidate content changed")
+
+
+def prepare(profile="reference"):
+    profiles = ["reference", "tencent-source"] if profile == "all" else [profile]
     with lock("setup"):
-        task, identity = new_task("prepare", committed=True)
+        task, identity = new_task("prepare", committed=True, profile=profiles[0])
         # Original script resolves its own repo root. It must live in this private export.
         exported = task / "host/candidate-source"
         shutil.copytree(task / "source", exported)
         run(sandbox(task, ["/usr/bin/bash", "/work/host/candidate-source/scripts/package-plugin.sh"]))
         artifact = exported / "dist/ChannelHub-v0.4.1.zip"
         artifact_hash = validate_zip(artifact, task / "source")
-        installed = task / "host/Plugin/ChannelHub"
-        shutil.rmtree(installed)
-        with zipfile.ZipFile(artifact) as archive:
-            # validate_zip has already rejected links, traversal, extras and duplicates.
-            archive.extractall(task / "host/Plugin")
-        results = check_task(task)
-        if digest(artifact.read_bytes()) != artifact_hash:
-            raise Refusal("candidate changed during verification")
-        expected = {p.relative_to(task / "source/Plugin/ChannelHub").as_posix(): digest(p.read_bytes())
-                    for p in (task / "source/Plugin/ChannelHub").rglob("*") if p.is_file()}
-        actual = {p.relative_to(installed).as_posix(): digest(p.read_bytes())
-                  for p in installed.rglob("*") if p.is_file()}
-        if actual != expected:
-            raise Refusal("installed candidate content changed")
+        matrix = {name: {"status": "NOT_RUN", "host": profile_sha(name), "artifact_sha256": artifact_hash} for name in profiles}
+        tasks = [task]
+        try:
+            for name in profiles:
+                current = task
+                if name != profiles[0]:
+                    current, _ = new_task("prepare", source=task / "source", identity=identity, profile=name)
+                    tasks.append(current)
+                installed = current / "host/Plugin/ChannelHub"
+                shutil.rmtree(installed)
+                with zipfile.ZipFile(artifact) as archive:
+                    # Only the already validated ZIP is installed, on both hosts.
+                    archive.extractall(current / "host/Plugin")
+                print(f"VERIFY CANDIDATE on {name}", flush=True)
+                results = check_task(current, name)
+                verify_install(current)
+                if digest(artifact.read_bytes()) != artifact_hash:
+                    raise Refusal("candidate changed during verification")
+                matrix[name].update({"status": "PASS", "results": results,
+                                     "dependencies": json.loads((current / "host-profile.json").read_text())})
+                write_json(task / "matrix-progress.json", matrix)
+            require_matrix(matrix, profiles, artifact_hash)
+        except Exception as exc:
+            # Keep successful rows and failed/not-run rows distinct; never publish a PASS candidate.
+            if "name" in locals() and matrix[name]["status"] == "NOT_RUN":
+                matrix[name].update({"status": "FAIL", "error_type": type(exc).__name__})
+            write_json(task / "matrix-failure.json", matrix)
+            print(f"FAILED matrix retained in task {task.name}; no verified candidate created", file=sys.stderr)
+            raise
         parent = CACHE / "candidates"
         owned_dir(parent)
         candidate = parent / (identity["commit"][:12] + "-" + artifact_hash[:12] + "-" + uuid.uuid4().hex[:8])
@@ -620,21 +737,30 @@ def prepare():
         shutil.copyfile(artifact, candidate / name)
         (candidate / (name + ".sha256")).write_text(artifact_hash + "  " + name + "\n")
         write_json(candidate / "verification.json", {
-            "schema": SCHEMA, "source": identity, "baseline": SOURCE_SHA, "host": HOST_SHA,
+            "schema": SCHEMA, "source": identity, "baseline": SOURCE_SHA, "host": profile_sha(profiles[0]),
             "node": "24.22.1", "npm": "10.9.8", "artifact": name, "sha256": artifact_hash,
-            "results": results, "production": False})
-        remove_task(task)
-        print(json.dumps({"status": "CANDIDATE_VERIFIED_ONLY", "candidate": str(candidate), "sha256": artifact_hash}))
+            "results": matrix[profiles[0]]["results"], "verification_matrix": matrix,
+            "verified_profiles": profiles, "full_server_executed": False, "live_channel_executed": False,
+            "production": False})
+        for current in tasks:
+            remove_task(current)
+        print(json.dumps({"status": "DUAL_HOST_CANDIDATE_VERIFIED_ONLY" if len(profiles) == 2 else "CANDIDATE_VERIFIED_ONLY",
+                          "candidate": str(candidate), "sha256": artifact_hash, "verified_profiles": profiles}))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["doctor", "check", "start", "stop", "reset", "prepare"])
+    parser.add_argument("--host", choices=[*HOSTS, "all"], default=None,
+                        help="fixed host profile; all is only accepted by prepare")
     args = parser.parse_args()
+    if args.host is not None and (args.command in {"stop", "reset"} or (args.host == "all" and args.command != "prepare")):
+        parser.error("host selection is unavailable for this command")
+    profile = args.host or "reference"
     if args.command == "doctor":
         tools_ok()
         verify_baseline()
-        print(json.dumps({"status": "PASS", "source_baseline": SOURCE_SHA, "host_fixture": HOST_SHA,
+        print(json.dumps({"status": "PASS", "source_baseline": SOURCE_SHA, "host_profile": profile, "host_fixture": profile_sha(profile),
                           "host_cached": HOST_GIT.exists(), "source_commit": git("rev-parse", "HEAD"),
                           "node": "24.22.1", "npm": "10.9.8", "isolation": "bwrap", "production": False}))
         return
@@ -643,13 +769,16 @@ def main():
     init_resources()
     if args.command == "check":
         with lock("setup"):
-            task, identity = new_task("check")
-            results = check_task(task)
-            write_json(STATE / "last-check.json", {"snapshot": identity, "results": results})
+            task, identity = new_task("check", profile=profile)
+            results = check_task(task, profile)
+            write_json(STATE / "last-check.json", {"snapshot": identity, "profile": profile, "host": profile_sha(profile), "results": results})
             remove_task(task)
-            print("PASS: source, pinned host, OneBot, controls, isolation, manager/mock; test task reclaimed")
+            print(f"PASS: {profile} checks, isolation, manager/mock; test task reclaimed")
     else:
-        {"start": start, "stop": stop, "reset": reset, "prepare": prepare}[args.command]()
+        if args.command in {"start", "prepare"}:
+            {"start": start, "prepare": prepare}[args.command](profile)
+        else:
+            {"stop": stop, "reset": reset}[args.command]()
 
 
 if __name__ == "__main__":

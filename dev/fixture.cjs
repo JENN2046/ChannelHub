@@ -15,6 +15,11 @@ const AGENT = 'pilot-synthetic';
 const MODEL = 'pilot-synthetic-model';
 const ANSWER = 'ChannelHub isolated synthetic answer';
 const ADMIN = { 'x-synthetic-admin': 'yes' };
+const hostProfile = process.env.CH_DEV_HOST_PROFILE;
+if (!['reference', 'tencent-source'].includes(hostProfile)) {
+    throw new Error('FIXTURE_HOST_PROFILE_REQUIRED');
+}
+const authMode = hostProfile === 'reference' ? 'native' : 'synthetic';
 const smoke = process.argv.slice(2);
 if (smoke.length > 1 || (smoke.length === 1 && smoke[0] !== '--smoke')) {
     throw new Error('FIXTURE_ARGUMENT_NOT_ALLOWED');
@@ -106,7 +111,18 @@ async function main() {
     app.use(express.json({ limit: '256kb' }));
     app.use('/admin_api', (req, res, next) =>
         req.headers['x-synthetic-admin'] === 'yes' ? next() : res.status(401).end());
-    app.use(require('../modules/apiBearerAuth')(HOST_KEY));
+    if (hostProfile === 'reference') {
+        app.use(require('../modules/apiBearerAuth')(HOST_KEY));
+    } else {
+        // The pinned tencent-source host predates apiBearerAuth.js. This is a
+        // synthetic fixture gate only: it does not patch, replace, or establish
+        // acceptance of that host's real server.js authentication boundary.
+        app.use((req, res, next) => {
+            if (req.path.startsWith('/admin_api') || req.path.startsWith('/plugin-callback')) return next();
+            if (req.headers.authorization === `Bearer ${HOST_KEY}`) return next();
+            res.status(401).json({ error: 'FIXTURE_SYNTHETIC_BEARER_REQUIRED' });
+        });
+    }
     app.post('/v1/chat/completions', (req, res) => {
         const body = req.body;
         if (body?.model !== MODEL || body?.messages?.[0]?.content !== 'SYNTHETIC_AGENT'
@@ -134,7 +150,7 @@ async function main() {
     assert.equal(manager.plugins.size, 1, 'FIXTURE_SINGLE_PLUGIN_REQUIRED');
     plugin = manager.getServiceModule('ChannelHub');
     assert.equal(plugin?.snapshot().ready, true, 'FIXTURE_PLUGIN_NOT_READY');
-    manager.initializeServices(app, admin, process.cwd());
+    await manager.initializeServices(app, admin, process.cwd());
 
     // The browser-facing socket deliberately has no native execution or B2
     // callback routes, even if a future relay bug forwards an arbitrary URL.
@@ -167,6 +183,7 @@ async function main() {
         body: body === undefined ? undefined : JSON.stringify(body)
     });
     assert.equal((await request('/admin_api/channelHub/health')).status, 401, 'FIXTURE_ADMIN_AUTH');
+    assert.equal((await request('/v1/chat/completions')).status, 401, 'FIXTURE_API_BEARER_AUTH');
     assert.equal((await request('/admin_api/channelHub/health', undefined, ADMIN)).status, 200, 'FIXTURE_HEALTH');
     for (const asset of ['/ui', '/ui/app.js', '/ui/style.css']) {
         const response = await request('/admin_api/channelHub' + asset, undefined, ADMIN);
@@ -209,7 +226,8 @@ async function main() {
     assert.deepEqual(outbox.data, [], 'FIXTURE_NO_OUTBOX_DELIVERY');
 
     const checks = {
-        nativePluginManager: true, adminAuth: true, health: true, ui: true,
+        nativePluginManager: true, adminAuth: true,
+        bearerGate: { mode: authMode, unauthenticatedRejected: true }, health: true, ui: true,
         agentCatalog: true, callbackAuth: true, inlineMock: true,
         deduplication: true, forgedIdentityRejected: true, noOutbox: true,
         mockCalls
@@ -222,7 +240,7 @@ async function main() {
         await shutdown();
         assert.equal(plugin.snapshot().ready, false, 'FIXTURE_SHUTDOWN');
         const verification = {
-            fixture: 'channelhub-dev', mockVerified: true, checks,
+            fixture: 'channelhub-dev', hostProfile, authMode, mockVerified: true, checks,
             drain: true, shutdown: true
         };
         fs.writeFileSync(path.join(path.dirname(readyPath), 'verification.json'),
@@ -233,7 +251,7 @@ async function main() {
     // Publication is last: devctl must never expose an incompletely checked host.
     const temporary = readyPath + '.tmp';
     fs.writeFileSync(temporary, JSON.stringify({
-        fixture: 'channelhub-dev', mode: 'synthetic-only', mockVerified: true,
+        fixture: 'channelhub-dev', hostProfile, authMode, mode: 'synthetic-only', mockVerified: true,
         uiRoute: '/admin_api/channelHub/ui', checks
     }) + '\n', { mode: 0o600, flag: 'wx' });
     fs.renameSync(temporary, readyPath);

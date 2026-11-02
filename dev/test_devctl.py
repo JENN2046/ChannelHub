@@ -1,6 +1,7 @@
 """Tests of pilot ownership, forwarding and artifact boundaries, not plugin behavior."""
 import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,46 @@ spec.loader.exec_module(d)
 
 
 class PilotBoundaries(unittest.TestCase):
+    def test_host_selector_rejects_dynamic_targets_before_execution(self):
+        for args in [["check", "--host", "https://example.invalid"],
+                     ["start", "--host", "all"], ["doctor", "--host", "all"],
+                     ["stop", "--host", "reference"], ["reset", "--host", "tencent-source"]]:
+            with patch.object(d.sys, "argv", ["devctl.py", *args]), \
+                    patch.object(d, "tools_ok") as tools, patch.object(d, "init_resources") as resources, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    d.main()
+                self.assertNotEqual(result.exception.code, 0)
+                tools.assert_not_called()
+                resources.assert_not_called()
+
+    def test_candidate_matrix_requires_both_exact_hosts_and_identical_zip(self):
+        artifact = "a" * 64
+        profiles = ["reference", "tencent-source"]
+        def matrix():
+            return {name: {"status": "PASS", "host": d.HOSTS[name], "artifact_sha256": artifact} for name in profiles}
+        d.require_matrix(matrix(), profiles, artifact)
+        incomplete = matrix(); del incomplete["tencent-source"]
+        with self.assertRaises(d.Refusal):
+            d.require_matrix(incomplete, profiles, artifact)
+        for field, value in [("status", "FAIL"), ("status", "NOT_RUN"),
+                             ("host", d.HOSTS["reference"]), ("artifact_sha256", "b" * 64)]:
+            wrong = matrix(); wrong["tencent-source"][field] = value
+            with self.assertRaises(d.Refusal):
+                d.require_matrix(wrong, profiles, artifact)
+
+    def test_core_integrity_detects_tampered_host_code(self):
+        with tempfile.TemporaryDirectory() as raw:
+            task = Path(raw)
+            (task / "host").mkdir()
+            code = task / "host/Plugin.js"
+            code.write_text("original core")
+            d.write_json(task / "host-core.json", {"Plugin.js": d.digest(code.read_bytes())})
+            self.assertEqual(d.verify_core(task)["status"], "PASS")
+            code.write_text("unexpected patch")
+            with self.assertRaises(d.Refusal):
+                d.verify_core(task)
+
     def test_relay_rejects_foreign_sites_and_path_smuggling(self):
         expected = "127.0.0.1:36123"
         for target in ["/v1/chat/completions", "/__dev/shutdown", "http://evil.invalid/",
