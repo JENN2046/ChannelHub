@@ -27,7 +27,9 @@ import zipfile
 
 SOURCE_SHA = "001e50997d94ed108382a09d1d968cffee6b8919"
 HOST_SHA = "fff563b2d33ad8aa93474714e050619a07e353e4"
-HOSTS = {"reference": HOST_SHA, "tencent-source": "a4ab674a403f10b7f91fcfc242719204621b2bb9"}
+HOSTS = {"reference": HOST_SHA,
+         "tencent-source": "a4ab674a403f10b7f91fcfc242719204621b2bb9",
+         "tencent-runtime": "ce904c476f58e0857aa9ee828619158a82d75e7e"}
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path.home()
 CACHE = HOME / ".cache/agents-os-dev/channelhub"
@@ -691,7 +693,7 @@ def verify_install(task):
 
 
 def prepare(profile="reference"):
-    profiles = ["reference", "tencent-source"] if profile == "all" else [profile]
+    profiles = list(HOSTS) if profile == "all" else [profile]
     with lock("setup"):
         task, identity = new_task("prepare", committed=True, profile=profiles[0])
         # Original script resolves its own repo root. It must live in this private export.
@@ -711,7 +713,7 @@ def prepare(profile="reference"):
                 installed = current / "host/Plugin/ChannelHub"
                 shutil.rmtree(installed)
                 with zipfile.ZipFile(artifact) as archive:
-                    # Only the already validated ZIP is installed, on both hosts.
+                    # Install the same already validated ZIP on every selected host.
                     archive.extractall(current / "host/Plugin")
                 print(f"VERIFY CANDIDATE on {name}", flush=True)
                 results = check_task(current, name)
@@ -744,7 +746,9 @@ def prepare(profile="reference"):
             "production": False})
         for current in tasks:
             remove_task(current)
-        print(json.dumps({"status": "DUAL_HOST_CANDIDATE_VERIFIED_ONLY" if len(profiles) == 2 else "CANDIDATE_VERIFIED_ONLY",
+        status = ("MULTI_HOST_CANDIDATE_VERIFIED_ONLY" if len(profiles) > 2 else
+                  "DUAL_HOST_CANDIDATE_VERIFIED_ONLY" if len(profiles) == 2 else "CANDIDATE_VERIFIED_ONLY")
+        print(json.dumps({"status": status,
                           "candidate": str(candidate), "sha256": artifact_hash, "verified_profiles": profiles}))
 
 

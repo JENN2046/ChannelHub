@@ -16,7 +16,7 @@ const MODEL = 'pilot-synthetic-model';
 const ANSWER = 'ChannelHub isolated synthetic answer';
 const ADMIN = { 'x-synthetic-admin': 'yes' };
 const hostProfile = process.env.CH_DEV_HOST_PROFILE;
-if (!['reference', 'tencent-source'].includes(hostProfile)) {
+if (!['reference', 'tencent-source', 'tencent-runtime'].includes(hostProfile)) {
     throw new Error('FIXTURE_HOST_PROFILE_REQUIRED');
 }
 const authMode = hostProfile === 'reference' ? 'native' : 'synthetic';
@@ -114,7 +114,7 @@ async function main() {
     if (hostProfile === 'reference') {
         app.use(require('../modules/apiBearerAuth')(HOST_KEY));
     } else {
-        // The pinned tencent-source host predates apiBearerAuth.js. This is a
+        // Both pinned Tencent hosts predate apiBearerAuth.js. This is a
         // synthetic fixture gate only: it does not patch, replace, or establish
         // acceptance of that host's real server.js authentication boundary.
         app.use((req, res, next) => {

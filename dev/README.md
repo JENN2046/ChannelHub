@@ -13,20 +13,25 @@ python3 -B dev/devctl.py check
 python3 -B dev/devctl.py start
 ```
 
-默认宿主为 `reference`，保留第一期行为。第二期支持两个固定宿主：
+默认宿主为 `reference`，保留第一期行为。三个固定源码宿主如下：
 
 | `--host` | 固定源码 | 验证范围 |
 |---|---|---|
 | `reference` | `fff563b2d33ad8aa93474714e050619a07e353e4` | 原有完整 ChannelHub/OneBot 回归、原生管理与模拟链路 |
 | `tencent-source` | `a4ab674a403f10b7f91fcfc242719204621b2bb9` | 目标宿主原生 PluginManager、管理与模拟链路、禁用/缺配置/503/超时/drain 兼容场景 |
+| `tencent-runtime` | `ce904c476f58e0857aa9ee828619158a82d75e7e` | 对应只读观察到的开发机版本槽，使用同一组原生管理与模拟兼容检查 |
 
 ```bash
 python3 -B dev/devctl.py doctor --host tencent-source
 python3 -B dev/devctl.py check --host tencent-source
 python3 -B dev/devctl.py start --host tencent-source
+python3 -B dev/devctl.py check --host tencent-runtime
 ```
 
-`tencent-source` 对应已核对的开发机登记源码，尚未确认它就是实际运行版本。
+`tencent-source` 对应已核对的开发机登记源码，本身不代表当前运行版本。
+2026-11-03 的只读观察已确认：登记源码仍为 `a4ab674`，进程 cwd 和 `current` 指向
+`ce904c47-toolchain-20261022-r1`，所以另加固定 `tencent-runtime`，不把旧 profile 改名或换基线。
+运行槽的普通源码对照与实际进程观察是限定证据，不等于所有部署文件、已加载字节或配置均一致。
 这里只在本机执行其隔离副本，不安装或切换开发机。任意 URL、Commit 或其他 profile 名称不被接受。
 一次只运行一个可变实例；`stop/reset` 根据已记录实例工作，不接受宿主选择参数。
 
@@ -53,6 +58,7 @@ python3 -B dev/devctl.py reset
 - ChannelHub 源基线 `001e50997d94ed108382a09d1d968cffee6b8919`。
 - 测试宿主 `JENN2046/VCPToolBox@fff563b2d33ad8aa93474714e050619a07e353e4`。
 - 目标源码宿主 `JENN2046/VCPToolBox@a4ab674a403f10b7f91fcfc242719204621b2bb9`。
+- 目标运行槽源码 `JENN2046/VCPToolBox@ce904c476f58e0857aa9ee828619158a82d75e7e`，从公开固定 Commit 获取，不复制服务器配置或数据。
 
 `doctor` 只检查，不安装或修复。
 首次 `check/start/prepare` 获取固定宿主并准备依赖：这个阶段允许网络，但在隔离文件系统中安装，
@@ -83,14 +89,14 @@ python3 -B dev/devctl.py reset
 python3 -B dev/devctl.py prepare
 ```
 
-默认仍仅验证 `reference`。第二期双宿主交付使用：
+默认仍仅验证 `reference`。验证所有已登记宿主使用：
 
 ```bash
 python3 -B dev/devctl.py prepare --host all
 ```
 
-`all` 仅供 `prepare` 使用：生成一次 ZIP，分别安装到两个独立宿主，逐项验证相同 ZIP 哈希。
-只有两个宿主都通过，才产生 `DUAL_HOST_CANDIDATE_VERIFIED_ONLY` 候选；任一失败则返回非零，
+`all` 仅供 `prepare` 使用：生成一次 ZIP，分别安装到三个独立宿主，逐项验证相同 ZIP 哈希。
+只有三个宿主都通过，才产生 `MULTI_HOST_CANDIDATE_VERIFIED_ONLY` 候选；任一失败则返回非零，
 在任务私有目录保留 `matrix-failure.json`，区分成功、失败与未运行项，不创建成功候选。
 验收记录保留原有字段，并增加 `verified_profiles` 和 `verification_matrix`，每行绑定宿主、依赖、同一产物哈希和实际验证范围。
 
@@ -118,8 +124,8 @@ python3 -B dev/devctl.py prepare --host all
 目标源码没有独立的 `modules/apiBearerAuth.js`，其真实 Bearer 中间件位于 `server.js`。
 目标 profile 的开发夹具使用明确标记的合成 Bearer 门禁，`authMode=synthetic`；
 真实 `server.js` 仅做静态接口核对，单独记录源码哈希与 `full_server_executed=false`。
-reference profile 使用它原有的鉴权模块，`authMode=native`，但同样不运行完整服务器。
-两种情况都不构成真实服务器权限、配置或真实渠道验收。
+reference profile 使用它原有的鉴权模块，`authMode=native`。两套腾讯目标均为 `authMode=synthetic`；三个 profile 都未启动完整 server.js。
+上述情况都不构成真实服务器权限、配置或真实渠道验收，也没有覆盖版本槽 WebSocket 的实际运行行为。
 
 开发辅助测试只检查新增命令的资源归属、转发限制、重置边界和候选完整性；业务回归直接复用既有测试。
 通过本试点不代表真实渠道、完整 VCP、开发机部署或生产验收通过。

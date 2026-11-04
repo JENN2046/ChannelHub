@@ -30,20 +30,21 @@ class PilotBoundaries(unittest.TestCase):
                 tools.assert_not_called()
                 resources.assert_not_called()
 
-    def test_candidate_matrix_requires_both_exact_hosts_and_identical_zip(self):
+    def test_candidate_matrix_requires_all_exact_hosts_and_identical_zip(self):
         artifact = "a" * 64
-        profiles = ["reference", "tencent-source"]
+        profiles = ["reference", "tencent-source", "tencent-runtime"]
         def matrix():
             return {name: {"status": "PASS", "host": d.HOSTS[name], "artifact_sha256": artifact} for name in profiles}
         d.require_matrix(matrix(), profiles, artifact)
-        incomplete = matrix(); del incomplete["tencent-source"]
-        with self.assertRaises(d.Refusal):
-            d.require_matrix(incomplete, profiles, artifact)
-        for field, value in [("status", "FAIL"), ("status", "NOT_RUN"),
-                             ("host", d.HOSTS["reference"]), ("artifact_sha256", "b" * 64)]:
-            wrong = matrix(); wrong["tencent-source"][field] = value
+        for name in profiles:
+            incomplete = matrix(); del incomplete[name]
             with self.assertRaises(d.Refusal):
-                d.require_matrix(wrong, profiles, artifact)
+                d.require_matrix(incomplete, profiles, artifact)
+            for field, value in [("status", "FAIL"), ("status", "NOT_RUN"),
+                                 ("host", "0" * 40), ("artifact_sha256", "b" * 64)]:
+                wrong = matrix(); wrong[name][field] = value
+                with self.assertRaises(d.Refusal):
+                    d.require_matrix(wrong, profiles, artifact)
 
     def test_core_integrity_detects_tampered_host_code(self):
         with tempfile.TemporaryDirectory() as raw:
