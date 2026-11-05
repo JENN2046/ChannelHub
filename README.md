@@ -29,10 +29,10 @@ for the pinned-host regression and synthetic fixture. This adds development help
 the stable 46-file plugin, native APIs and CI remain unchanged. No production target
 or live channel credentials are supported by this pilot.
 
-Three fixed host profiles are available: `reference` (the default),
-`tencent-source`, and `tencent-runtime` (the published commit corresponding to
+Four fixed host profiles are available: `accepted` (the default, ToolBox #302 merge `165a126b`),
+`reference`, `tencent-source`, and `tencent-runtime` (the published commit corresponding to
 the observed development-machine release). Use `python3 -B dev/devctl.py prepare --host all` to verify
-one ZIP against all three isolated host fixtures. Target-host synthetic authentication
+one ZIP against all four isolated host fixtures. Target-host synthetic authentication
 and static server review are recorded separately from native lifecycle checks;
 this is not acceptance of a live server or channel.
 

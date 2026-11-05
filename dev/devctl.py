@@ -29,7 +29,9 @@ SOURCE_SHA = "001e50997d94ed108382a09d1d968cffee6b8919"
 HOST_SHA = "fff563b2d33ad8aa93474714e050619a07e353e4"
 HOSTS = {"reference": HOST_SHA,
          "tencent-source": "a4ab674a403f10b7f91fcfc242719204621b2bb9",
-         "tencent-runtime": "ce904c476f58e0857aa9ee828619158a82d75e7e"}
+         "tencent-runtime": "ce904c476f58e0857aa9ee828619158a82d75e7e",
+         "accepted": "165a126b5b43a743822047801efc2b6d5e436f48"}
+DEFAULT_HOST = "accepted"
 ROOT = Path(__file__).resolve().parents[1]
 HOME = Path.home()
 CACHE = HOME / ".cache/agents-os-dev/channelhub"
@@ -203,18 +205,27 @@ def profile_sha(profile):
     return HOSTS[profile]
 
 
-def ensure_host(profile):
+def host_is_cached(profile):
     sha = profile_sha(profile)
+    safe_chain(HOST_GIT)
     if not HOST_GIT.exists():
-        run(["git", "init", "--bare", HOST_GIT])
+        return False
     probe = subprocess.run(["git", f"--git-dir={HOST_GIT}", "cat-file", "-e", sha + "^{commit}"],
                            env=ENV, capture_output=True)
-    if probe.returncode:
+    return probe.returncode == 0
+
+
+def ensure_host(profile):
+    sha = profile_sha(profile)
+    safe_chain(HOST_GIT)
+    if not HOST_GIT.exists():
+        run(["git", "init", "--bare", HOST_GIT])
+    if not host_is_cached(profile):
         run(["git", "-c", "credential.helper=", f"--git-dir={HOST_GIT}", "fetch", "--depth=1",
              "https://github.com/JENN2046/VCPToolBox.git", sha], timeout=300)
 
 
-def host_archive(destination, profile="reference"):
+def host_archive(destination, profile=DEFAULT_HOST):
     """Export ordinary pinned source only; exclude agents, diary, config and unrelated plugins."""
     ensure_host(profile)
     sha = profile_sha(profile)
@@ -297,7 +308,7 @@ def dependency_identity(profile):
     return {"host": sha, "profile": profile, "node": "24.22.1", "npm": "10.9.8", "lockfile_sha256": digest(lock_data)}
 
 
-def dependencies(profile="reference"):
+def dependencies(profile=DEFAULT_HOST):
     ensure_host(profile)
     identity = dependency_identity(profile)
     target = CACHE / ("deps-r2-" + identity["host"][:12] + "-" + identity["lockfile_sha256"][:12] + "-node24.22.1-npm10.9.8")
@@ -328,7 +339,7 @@ def dependencies(profile="reference"):
     return target
 
 
-def new_task(kind, *, committed=False, source=None, identity=None, profile="reference"):
+def new_task(kind, *, committed=False, source=None, identity=None, profile=DEFAULT_HOST):
     profile_sha(profile)
     parent = CACHE / "tasks"
     owned_dir(parent)
@@ -401,7 +412,7 @@ def static_host_evidence(task, profile):
             "auth_excerpt_normalized_sha256": digest(excerpt.encode())}
 
 
-def check_task(task, profile="reference"):
+def check_task(task, profile=DEFAULT_HOST):
     verify_core(task)
     commands = [
         ("source-layout", ["/tool/node", "--test", "/source/tests/source-layout.test.cjs"]),
@@ -532,7 +543,7 @@ def active_record():
     return record
 
 
-def start(profile="reference"):
+def start(profile=DEFAULT_HOST):
     with lock("instance"):
         if (STATE / "active.json").exists():
             raise Refusal("existing instance record must be resolved first")
@@ -692,7 +703,7 @@ def verify_install(task):
         raise Refusal("installed candidate content changed")
 
 
-def prepare(profile="reference"):
+def prepare(profile=DEFAULT_HOST):
     profiles = list(HOSTS) if profile == "all" else [profile]
     with lock("setup"):
         task, identity = new_task("prepare", committed=True, profile=profiles[0])
@@ -760,12 +771,12 @@ def main():
     args = parser.parse_args()
     if args.host is not None and (args.command in {"stop", "reset"} or (args.host == "all" and args.command != "prepare")):
         parser.error("host selection is unavailable for this command")
-    profile = args.host or "reference"
+    profile = args.host or DEFAULT_HOST
     if args.command == "doctor":
         tools_ok()
         verify_baseline()
         print(json.dumps({"status": "PASS", "source_baseline": SOURCE_SHA, "host_profile": profile, "host_fixture": profile_sha(profile),
-                          "host_cached": HOST_GIT.exists(), "source_commit": git("rev-parse", "HEAD"),
+                          "host_cached": host_is_cached(profile), "source_commit": git("rev-parse", "HEAD"),
                           "node": "24.22.1", "npm": "10.9.8", "isolation": "bwrap", "production": False}))
         return
     if args.command in {"check", "start", "prepare"}:

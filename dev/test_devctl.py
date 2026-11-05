@@ -30,9 +30,54 @@ class PilotBoundaries(unittest.TestCase):
                 tools.assert_not_called()
                 resources.assert_not_called()
 
+    def test_default_cli_uses_current_accepted_host(self):
+        self.assertEqual(d.DEFAULT_HOST, "accepted")
+        self.assertEqual(d.HOSTS["accepted"], "165a126b5b43a743822047801efc2b6d5e436f48")
+        for command in ["start", "prepare"]:
+            with self.subTest(command=command), patch.object(d.sys, "argv", ["devctl.py", command]), \
+                    patch.object(d, "tools_ok"), patch.object(d, "init_resources"), patch.object(d, command) as action:
+                d.main(); action.assert_called_once_with("accepted")
+        with patch.object(d.sys, "argv", ["devctl.py", "check"]), patch.object(d, "tools_ok"), \
+                patch.object(d, "init_resources"), patch.object(d, "lock", return_value=contextlib.nullcontext()), \
+                patch.object(d, "new_task", return_value=(Path("/synthetic-task"), {})) as new_task, \
+                patch.object(d, "check_task", return_value={}) as check, patch.object(d, "write_json"), \
+                patch.object(d, "remove_task"), contextlib.redirect_stdout(io.StringIO()):
+            d.main(); new_task.assert_called_once_with("check", profile="accepted"); check.assert_called_once_with(Path("/synthetic-task"), "accepted")
+        with patch.object(d.sys, "argv", ["devctl.py", "doctor"]), patch.object(d, "tools_ok"), \
+                patch.object(d, "verify_baseline"), patch.object(d, "git", return_value="synthetic-head"), \
+                patch.object(d, "host_is_cached", return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            d.main(); result=json.loads(out.getvalue()); self.assertEqual(result["host_profile"], "accepted")
+            self.assertEqual(result["host_fixture"], d.HOSTS["accepted"]); self.assertFalse(result["host_cached"])
+
+    def test_cache_readiness_checks_selected_commit_without_fetching(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as raw, patch.object(d, "HOST_GIT", Path(raw)/"host.git"), \
+                patch.object(d.subprocess, "run", return_value=SimpleNamespace(returncode=1)) as probe:
+            self.assertFalse(d.host_is_cached("accepted")); probe.assert_not_called()
+            d.HOST_GIT.mkdir()
+            self.assertFalse(d.host_is_cached("accepted"))
+            self.assertIn(d.HOSTS["accepted"]+"^{commit}",probe.call_args.args[0])
+            probe.return_value=SimpleNamespace(returncode=0)
+            self.assertTrue(d.host_is_cached("reference"))
+            self.assertIn(d.HOSTS["reference"]+"^{commit}",probe.call_args.args[0])
+            self.assertNotIn("fetch",probe.call_args.args[0])
+            d.HOST_GIT.rmdir(); outside=Path(raw)/"outside"; outside.mkdir(); d.HOST_GIT.symlink_to(outside, target_is_directory=True)
+            with patch.object(d, "run") as execute:
+                with self.assertRaises(d.Refusal):d.ensure_host("accepted")
+                execute.assert_not_called()
+
+
+    def test_historical_hosts_remain_exact_and_do_not_alias_new_default(self):
+        self.assertEqual({key:d.HOSTS[key] for key in ["reference", "tencent-source", "tencent-runtime"]}, {
+            "reference":"fff563b2d33ad8aa93474714e050619a07e353e4",
+            "tencent-source":"a4ab674a403f10b7f91fcfc242719204621b2bb9",
+            "tencent-runtime":"ce904c476f58e0857aa9ee828619158a82d75e7e"})
+        self.assertEqual(len(set(d.HOSTS.values())),4)
+
     def test_candidate_matrix_requires_all_exact_hosts_and_identical_zip(self):
         artifact = "a" * 64
-        profiles = ["reference", "tencent-source", "tencent-runtime"]
+        profiles = list(d.HOSTS)
         def matrix():
             return {name: {"status": "PASS", "host": d.HOSTS[name], "artifact_sha256": artifact} for name in profiles}
         d.require_matrix(matrix(), profiles, artifact)

@@ -13,10 +13,11 @@ python3 -B dev/devctl.py check
 python3 -B dev/devctl.py start
 ```
 
-默认宿主为 `reference`，保留第一期行为。三个固定源码宿主如下：
+默认宿主为 `accepted`，与工作区已接受的 ToolBox #302 合并点对齐；旧宿主保持其原固定身份。四个固定源码宿主如下：
 
 | `--host` | 固定源码 | 验证范围 |
 |---|---|---|
+| `accepted`（默认） | `165a126b5b43a743822047801efc2b6d5e436f48` | 当前工作区接受宿主的原生 PluginManager、管理与模拟链路及兼容检查 |
 | `reference` | `fff563b2d33ad8aa93474714e050619a07e353e4` | 原有完整 ChannelHub/OneBot 回归、原生管理与模拟链路 |
 | `tencent-source` | `a4ab674a403f10b7f91fcfc242719204621b2bb9` | 目标宿主原生 PluginManager、管理与模拟链路、禁用/缺配置/503/超时/drain 兼容场景 |
 | `tencent-runtime` | `ce904c476f58e0857aa9ee828619158a82d75e7e` | 对应只读观察到的开发机版本槽，使用同一组原生管理与模拟兼容检查 |
@@ -89,14 +90,14 @@ python3 -B dev/devctl.py reset
 python3 -B dev/devctl.py prepare
 ```
 
-默认仍仅验证 `reference`。验证所有已登记宿主使用：
+默认仅验证 `accepted`；需要原参考宿主时显式使用 `--host reference`。验证所有已登记宿主使用：
 
 ```bash
 python3 -B dev/devctl.py prepare --host all
 ```
 
-`all` 仅供 `prepare` 使用：生成一次 ZIP，分别安装到三个独立宿主，逐项验证相同 ZIP 哈希。
-只有三个宿主都通过，才产生 `MULTI_HOST_CANDIDATE_VERIFIED_ONLY` 候选；任一失败则返回非零，
+`all` 仅供 `prepare` 使用：生成一次 ZIP，分别安装到四个独立宿主，逐项验证相同 ZIP 哈希。
+只有四个宿主都通过，才产生 `MULTI_HOST_CANDIDATE_VERIFIED_ONLY` 候选；任一失败则返回非零，
 在任务私有目录保留 `matrix-failure.json`，区分成功、失败与未运行项，不创建成功候选。
 验收记录保留原有字段，并增加 `verified_profiles` 和 `verification_matrix`，每行绑定宿主、依赖、同一产物哈希和实际验证范围。
 
@@ -107,7 +108,7 @@ python3 -B dev/devctl.py prepare --host all
 3. 在原生 PluginManager 中检查管理页、合成 Agent、模拟消息、去重、伪造身份拒绝、空 outbox 和 drain/shutdown。
 4. 核对安装内容和 ZIP 哈希未变化，保存 ZIP、校验和及绑定源码/宿主/工具链的验收记录。
 
-目标 profile 不包含三套渠道适配器，因此其完整适配器回归由 reference profile 承担；
+非 reference profile 不包含三套渠道适配器，因此其完整适配器回归由 reference profile 承担；
 目标 profile 只安装 ChannelHub，并运行上述针对性兼容检查与原生管理/模拟场景。
 目标宿主核心文件只读挂载，验收前后核对原始核心文件哈希；不复制参考宿主核心文件来补齐接口。
 
@@ -121,11 +122,13 @@ python3 -B dev/devctl.py prepare --host all
 检查 Host/Origin，不暴露模型调用、B2 回调或内部关闭路由。
 开发宿主只加载 ChannelHub，配置值为合成测试值。
 
-目标源码没有独立的 `modules/apiBearerAuth.js`，其真实 Bearer 中间件位于 `server.js`。
+腾讯目标及 accepted 源码没有独立的 `modules/apiBearerAuth.js`，其真实 Bearer 中间件位于 `server.js`。
 目标 profile 的开发夹具使用明确标记的合成 Bearer 门禁，`authMode=synthetic`；
 真实 `server.js` 仅做静态接口核对，单独记录源码哈希与 `full_server_executed=false`。
-reference profile 使用它原有的鉴权模块，`authMode=native`。两套腾讯目标均为 `authMode=synthetic`；三个 profile 都未启动完整 server.js。
+reference profile 使用它原有的鉴权模块，`authMode=native`。两套腾讯目标及 accepted 均为 `authMode=synthetic`；四个 profile 都未启动完整 server.js。
 上述情况都不构成真实服务器权限、配置或真实渠道验收，也没有覆盖版本槽 WebSocket 的实际运行行为。
 
 开发辅助测试只检查新增命令的资源归属、转发限制、重置边界和候选完整性；业务回归直接复用既有测试。
 通过本试点不代表真实渠道、完整 VCP、开发机部署或生产验收通过。
+
+当前 accepted 使用普通源码的固定 Commit，不读取工作区的运行配置或数据库。工作区完整 server.js/Chat 的隔离验收另有记录；本项目 fixture 与 ZIP 验证保持最小宿主范围，不将模拟鉴权当作真实服务鉴权验收。
