@@ -55,7 +55,7 @@ python3 -B dev/devctl.py reset
 ## 工具链与首次准备
 
 - Linux、Python 3 标准库、Git、bubblewrap、zip/unzip、GNU cp。
-- 固定 Node `24.22.1` 和 npm `10.9.8`。当前本机路径由 `devctl.py` 明确绑定；不修改默认 Node。
+- 固定 Node `24.22.1` 和 npm `10.9.8`。在已加载 nvm 的终端运行 `(nvm install 24.22.1)` 即可并行安装验包用 Node。工具优先读取 nvm 的版本目录（支持 `NVM_DIR`，默认 `~/.nvm`），也兼容提供同一精确版本的旧 Codex 运行时。npm CLI 沿用 nvm 的 `v22.23.1` 安装目录，由验包用 Node 执行；`doctor` 会核对两者版本。
 - ChannelHub 源基线 `001e50997d94ed108382a09d1d968cffee6b8919`。
 - 测试宿主 `JENN2046/VCPToolBox@fff563b2d33ad8aa93474714e050619a07e353e4`。
 - 目标源码宿主 `JENN2046/VCPToolBox@a4ab674a403f10b7f91fcfc242719204621b2bb9`。

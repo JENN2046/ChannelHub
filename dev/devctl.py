@@ -36,8 +36,11 @@ ROOT = Path(__file__).resolve().parents[1]
 HOME = Path.home()
 CACHE = HOME / ".cache/agents-os-dev/channelhub"
 STATE = HOME / ".local/share/agents-os-dev/channelhub"
-NODE = HOME / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-NPM = HOME / ".nvm/versions/node/v22.23.1/lib/node_modules/npm/bin/npm-cli.js"
+NVM_VERSIONS = Path(os.environ.get("NVM_DIR") or HOME / ".nvm") / "versions/node"
+NODE = NVM_VERSIONS / "v24.22.1/bin/node"
+if not NODE.is_file():
+    NODE = HOME / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+NPM = NVM_VERSIONS / "v22.23.1/lib/node_modules/npm/bin/npm-cli.js"
 HOST_GIT = CACHE / "host.git"
 SCHEMA = "channelhub-dev-pilot-r1"
 ENV = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C.UTF-8",
@@ -272,8 +275,8 @@ def sandbox(task, argv):
 
 
 def tools_ok():
-    if run([NODE, "--version"], capture=True).strip() != b"v24.22.1":
-        raise Refusal("Node 24.22.1 required")
+    if not NODE.is_file() or run([NODE, "--version"], capture=True).strip() != b"v24.22.1":
+        raise Refusal("Node 24.22.1 required; install it with (nvm install 24.22.1)")
     if run([NODE, NPM, "--version"], capture=True).strip() != b"10.9.8":
         raise Refusal("npm 10.9.8 required")
     for name in ("bwrap", "git", "zip", "unzip", "cp"):
